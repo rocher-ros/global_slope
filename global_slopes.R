@@ -51,7 +51,7 @@ coords_site <-   tibble::add_column(coords_site, z=extract(dem_point, coords_sit
 # Calculate the slope between the site and the downstream site
 chem_geo$slope[i] <- abs(min(coords_site$z[-1])-coords_site$z[1])/range
 
-print(paste("we've done", i, "slope is", round(chem_geo$slope[i],5)))
+print(paste("we've done", i, "slope is", round(dataset$slope[i],5)))
 }
 
 # a simple way to visualize it
