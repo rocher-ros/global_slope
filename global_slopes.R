@@ -10,7 +10,6 @@ library(raster)
 library(dplyr)
 library(readr)
 library(rgdal)
-library(extrafont)
 library(rworldmap)
 
 # First we read the file with coordinates in WGS84 and make a new column for the slopes
@@ -49,7 +48,7 @@ dem_point <- get_elev_raster(coords_site, prj = prj_dd,z = 12, src = "aws")
 coords_site <-   tibble::add_column(coords_site, z=extract(dem_point, coords_site) )
 
 # Calculate the slope between the site and the downstream site
-chem_geo$slope[i] <- abs(min(coords_site$z[-1])-coords_site$z[1])/range
+dataset$slope[i] <- abs(min(coords_site$z[-1])-coords_site$z[1])/range
 
 print(paste("we've done", i, "slope is", round(dataset$slope[i],5)))
 }
