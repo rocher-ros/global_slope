@@ -1,5 +1,7 @@
 
-
+# R script to estimate river slope in any given location in the globe, providing a pair of coordinates.
+# Written by: Gerard Rocher-Ros
+# Last edit: 2021-05-11
 
 
 # Package and functions loading ----
