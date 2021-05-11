@@ -54,6 +54,7 @@ min_catch_area = 5000
 #  It may need some tuning depending on the region, as not all the globe has high high res DEM. check ?get_elev_raster
 dem_zoom_level = 13
 
+## keep_gis_files = Set to true if you want to keep the DEM and tifs created by whitebox, as well as the coordinate site as shapefiles
 keep_gis_files = FALSE
 
 #Create some folders
