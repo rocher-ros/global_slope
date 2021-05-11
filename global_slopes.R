@@ -1,59 +1,152 @@
-#####
-##### R script to calculate river slope of a global dataset. Written by G Rocher-Ros. 2018
-
-# Needed packages:
-library(ggplot2)
-library(elevatr)
-library(sp)
-library(geosphere)
-library(raster)
-library(dplyr)
-library(readr)
-library(rgdal)
-library(rworldmap)
-
-# First we read the file with coordinates in WGS84 and make a new column for the slopes
-dataset<- read_csv("dataset_coords.csv") %>% mutate(slope=NA)
 
 
-## we set a range to 500 m, to calculate the slope as the difference in elevation between two points of the river channel
-range <- 500
-
-#We set the projection to WGS84
-prj_dd <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 
 
-#This loop will for each site:
-#1. Obtain the coordinates
-#2. Retrieve the coordinates of the points located at a defined range around the site
-#3. Download a raster of DEM of that area
-#4. Extract the elevation of the site and the points around the site.
-#5. Find the minimum elevation within the circle, that corresponds to the downstream of the site.
-#   Ideally, I would prefer the upstream, but that would require a complex algorithim to determine.
-#6. Calculate the slope between the site and the downstream site
+# Package and functions loading ----
 
-for(i in 1:nrow(dataset)){
+# Packages needed
+package_list <- c('raster', 'tidyverse', 'sp', 'geosphere', 'whitebox', 'rgdal', 
+                  'sf', 'elevatr', 'geosphere', 'dismo', 'Rfast', 'foreach', 'parallel')
 
-#Obtain the coordinates
-coords_site <-  data.frame(x=dataset$Longitude[i], y=dataset$Latitude[i])
+# Check if there are any packages missing
+packages_missing <- setdiff(package_list, rownames(installed.packages()))
 
-#Retrieve the coordinates of the points located a defined range around the site
-coords_corners <- destPoint(coords_site[1,], seq(0, 350, by=10), range)
+#If we find a package missing, install them
+if(length(packages_missing) >= 1) install.packages(packages_missing) 
 
-coords_site <- coords_site %>% add_row( x=coords_corners[,1], y=coords_corners[,2])
+# Now load all the packages
+lapply(package_list, require, character.only = TRUE)
 
-#Download a raster of DEM of that area
-dem_point <- get_elev_raster(coords_site, prj = prj_dd,z = 12, src = "aws")
+# Whitebox may need need some manual installation of whitebox tools, see this for details: https://github.com/giswqs/whiteboxR
 
-coords_site <-   tibble::add_column(coords_site, z=extract(dem_point, coords_site) )
 
-# Calculate the slope between the site and the downstream site
-dataset$slope[i] <- abs(min(coords_site$z[-1])-coords_site$z[1])/range
+# source the file with the custom functions
+source("0_functions.R")
 
-print(paste("we've done", i, "slope is", round(dataset$slope[i],5)))
+
+# Prepare the file ----
+# make a new dataset with the coordinates and a site label. As example 5 sites spread around the world
+# careful, there should not be spaces in the name string as whitebox doesn't like it
+coords <- data.frame(site_id= c("home_in_sweden", "my_home_village", "hubbard_brook", "mongolia", "angola"),
+                 lon = c(20.459291, 0.915649, -71.736965, 99.307124, 20.816415),
+                 lat = c(63.898876, 42.671793, 43.934452, 47.997440, -16.399621))
+ 
+
+# Set parameters ----
+
+## dist_to_upstream: the distance of your desired reach to get a reach slope, in meters, 
+#   should be an order magnitude higher than the raster resolution for more accurate slope
+dist_to_upstream = 500
+
+## search_stream: How far you want the script to search for the closest stream to snap. 
+#  make it small if you are certain your coordinates are close to the stream. It uses a jenson snapping 
+#  so it will catch the closest stream regardless
+search_stream = 1000
+
+## min_catch_area: minimum catchment area to generate a stream in the DEM. It varies due to climate, runoff, season, geology...
+#  this is mostly important if the your coordinates of interest are not close to the stream, otherwise it will snap to a not-real 
+#  stream if the value is too low
+min_catch_area = 5000
+
+## dem_zoom_level = variable that controls the resolution of the DEM. 1 is lower resolution, 14 highest. 
+#  It may need some tuning depending on the region, as not all the globe has high high res DEM. check ?get_elev_raster
+dem_zoom_level = 13
+
+keep_gis_files = FALSE
+
+#Create some folders
+dir.create("file_outputs")
+dir.create("plots_outputs")
+
+# Run on a normal loop ----
+# It needs to be done one by one, if not elevatr tries to download a DEM covering all sites
+#initialise an empty df
+dat <- NULL
+
+# for loop
+for(i in seq_along(coords$site_id)) {
+  
+ a <-  snap_site_and_upstream(coords[i,],
+                         max_dist =dist_to_upstream, 
+                         snap_dist= search_stream,
+                         init_threshold = min_catch_area,
+                         zoom_level= dem_zoom_level,
+                         keep_files = keep_gis_files)
+  
+dat <- bind_rows(dat, a)
+}
+# The output contains multiple variables, not only slope.
+# site_id = id of the site
+# lat_new = latitude of the snapped site
+# lon_new = longitude of the snapped site
+# lat_up = latitude of site upstream
+# lon_up =  longitude of site upstream
+# dist_total = total reach distance, in meters,
+# dist_linear = linear distance, in meters
+# z_up = elevation site upstream,
+# z = elevation snapped site
+# z_old= elevation original site
+# slope = slope, in m/m
+# flow_acc = flow accumulation, in # of cells
+# flow_acc_old = flow accumulation of the original site
+# resolution = resolution of the DEM, in meters
+# 
+# The linear distance is a useful QAQC variable, as if it is very small it often indicates there was either
+# a problem or that the site is in a meander
+
+
+
+# Run in parallel in case there are many sites ----
+# In my project we have several thousand sites and it took few days to run, parallelising was worth it!
+#### Run in parallel with multiple cores. Following structure by Blas Benito post:
+####  https://blasbenito.com/post/02_parallelizing_loops_with_r/
+
+
+
+#set number of cores to use
+n.cores <- parallel::detectCores() - 1
+
+#create the cluster
+my.cluster <- parallel::makeCluster(
+  n.cores, 
+  type = "PSOCK"
+)
+
+#check cluster definition (optional)
+print(my.cluster)
+
+#register it to be used by %dopar%
+doParallel::registerDoParallel(cl = my.cluster)
+
+#check if it is registered (optional)
+foreach::getDoParRegistered()
+
+#list of packages to pass to the parallel loop, I remove the packages that will not need for processing (read files and parallel computing)
+package_list_par <- package_list[!package_list %in% 
+                                   grep(paste0(c( "foreach", "parallel"), collapse = "|"), 
+                                        package_list, value = T)]
+
+
+#loop is here, check the blog for details
+dat_out8 <- foreach(
+  i = nrow(coords), 
+  .combine = 'rbind',
+  .packages= package_list_par 
+) %dopar% {
+  a <-  snap_site_and_upstream(coords[i,],
+                               max_dist =dist_to_upstream, 
+                               snap_dist= search_stream,
+                               init_threshold = min_catch_area)
+  
+bind_rows(a)
+
 }
 
-# a simple way to visualize it
-plot(dem_point)
-lines(coords_site, type="p", pch=19, cex=.6)
-lines(coords_site[13,], type="p", pch=19, cex=.6, col="red")
+
+#stop the cluster after running
+parallel::stopCluster(cl = my.cluster)
+
+
+
+
+
